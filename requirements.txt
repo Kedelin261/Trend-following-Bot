@@ -1,0 +1,16 @@
+# Core dependencies
+PyYAML>=6.0
+python-dotenv>=1.0.0
+
+# Interactive Brokers — ib-insync (macOS, Linux, Windows)
+# Requires TWS or IB Gateway running locally.
+ib-insync>=0.9.70
+
+# MetaTrader 5 — Windows only; install manually on Windows:
+#   pip install MetaTrader5
+# Platform marker prevents install failure on macOS/Linux:
+MetaTrader5>=5.0.0; sys_platform == "win32"
+
+# Testing
+pytest>=7.4.0
+pytest-cov>=4.1.0

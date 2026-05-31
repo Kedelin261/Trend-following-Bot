@@ -1,0 +1,134 @@
+# ============================================================
+# Phase 1 Market Data Bot — Configuration
+# ============================================================
+
+# Active market data provider.
+# Implemented: mt5
+# Planned (not yet built): ibkr, polygon, yahoo, alpaca, oanda
+provider: ibkr
+
+# ============================================================
+# Database
+# ============================================================
+database:
+  path: data/market_data.db
+
+# ============================================================
+# Symbols to track
+# ============================================================
+symbols:
+  - EURUSD
+  - GBPUSD
+  - USDJPY
+  - BTCUSD
+
+# Broker-suffix aliases. The system tries each name in order
+# and uses the first one found in Market Watch.
+symbol_aliases:
+  EURUSD:
+    - EURUSD
+    - EURUSD.r
+    - EURUSDm
+    - EURUSD.pro
+  GBPUSD:
+    - GBPUSD
+    - GBPUSD.r
+    - GBPUSDm
+    - GBPUSD.pro
+  USDJPY:
+    - USDJPY
+    - USDJPY.r
+    - USDJPYm
+    - USDJPY.pro
+  BTCUSD:
+    - BTCUSD
+    - BTCUSD.r
+    - BTCUSDm
+    - BTCUSD.cash
+
+# ============================================================
+# Timeframes to sync
+# Valid values: M1 M5 M15 M30 H1 H4 D1 W1
+# ============================================================
+timeframes:
+  - H1
+  - H4
+  - D1
+
+# ============================================================
+# History
+# ============================================================
+history:
+  # Candles per symbol/timeframe per run
+  default_candle_count: 500
+
+# ============================================================
+# Phase 4 — Backtesting Engine
+# ============================================================
+backtest:
+  starting_balance:         10000       # starting portfolio cash ($)
+  commission_per_trade:     1.00        # per side ($) — total $2 round trip
+  slippage_percent:         0.05        # one-way slippage as % of price
+  walk_forward_train_pct:   0.70        # fraction of data used for in-sample
+  minimum_trades_required:  30          # FAIL health check below this count
+  min_warmup:               210         # bars before first signal attempt
+
+# ============================================================
+# Phase 3 — ATR Risk Engine
+# ============================================================
+risk:
+  account_size:             10000       # total account equity ($)
+  cash_available:           10000       # deployable cash — override with live value
+  risk_per_trade_percent:   1.0         # max loss per trade as % of cash_available
+  atr_period:               14          # ATR lookback window (Wilder's method)
+  atr_stop_multiplier:      2.0         # stop = entry ± ATR × this
+  atr_target_multiplier:    3.0         # target = entry ± ATR × this
+  minimum_signal_score:     70.0        # reject if signal score < this
+  minimum_risk_reward:      1.5         # reject if R:R < this
+  max_open_positions:       1           # reserved for Phase 6/7
+  max_daily_loss_percent:   3.0         # daily halt threshold (reserved)
+  max_weekly_loss_percent:  5.0         # weekly halt threshold (reserved)
+
+# ============================================================
+# Interactive Brokers provider settings
+# To activate: set provider: ibkr above
+# ============================================================
+ibkr:
+  host: 127.0.0.1
+  port: 7497          # 7497=TWS paper | 7496=TWS live | 4002=Gateway paper | 4001=Gateway live
+  client_id: 1
+  timeout: 10.0       # seconds to wait for connection
+  readonly: true      # read-only API mode (no orders possible)
+
+# ============================================================
+# MetaTrader 5 provider settings
+# ============================================================
+mt5:
+  # Names of environment variables that hold credentials.
+  # Leave values empty in .env to connect via the logged-in MT5 session.
+  login_env: MT5_LOGIN
+  password_env: MT5_PASSWORD
+  server_env: MT5_SERVER
+
+  # Connection retry behaviour
+  retry_count: 3
+  retry_delay_seconds: 5
+
+  # When true, attempts mt5.initialize() without credentials (uses the
+  # currently logged-in MT5 session). Set false to require .env credentials.
+  allow_initialize_without_credentials: true
+
+# ============================================================
+# Logging
+# ============================================================
+logging:
+  level: INFO          # DEBUG | INFO | WARNING | ERROR | CRITICAL
+  file: logs/bot.log
+
+# ============================================================
+# Safety — MUST remain false for Phase 1
+# ============================================================
+safety:
+  trading_enabled: false
+  live_trading_enabled: false
+  orders_allowed: false
