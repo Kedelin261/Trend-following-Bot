@@ -1,114 +1,117 @@
-"""Tests for VolatilityFilter — ATR% categorization and trade slicing."""
+"""Tests for VolatilityFilter — Phase 5.4."""
 
 import pytest
-from datetime import datetime, timedelta, timezone
-from typing import List
-
-from src.backtest.models import BacktestTrade, ClosingReason
+from datetime import datetime, timezone, timedelta
+from unittest.mock import MagicMock, patch
+from src.amplification_validation.volatility_filter import VolatilityFilter
+from src.regime.volatility_regime_detector import VolatilityRegime
 from src.data.models import Candle
-from src.research.volatility_filter import VolatilityCategory, VolatilityFilter
-from src.signals.models import SignalType
-from tests.fixtures import uptrend_candles
 
 
-BASE = datetime(2023, 1, 1, tzinfo=timezone.utc)
+def _candles(n: int = 20, atr_pct: float = 1.0, symbol: str = "SPY") -> list:
+    """Generate candles with controlled ATR% for deterministic regime testing."""
+    import random
+    rng = random.Random(42)
+    base_price = 400.0
+    base = datetime(2020, 1, 1, tzinfo=timezone.utc)
+    out = []
+    # Use a spread that gives approximately the requested ATR% of price
+    # ATR% = ATR/close * 100 ; ATR ≈ (high-low) * 0.7 for simple approximation
+    spread = base_price * (atr_pct / 100.0) / 0.7
+    for i in range(n):
+        close = base_price * (1 + rng.gauss(0, 0.001))
+        high  = close + spread * 0.5
+        low   = close - spread * 0.5
+        out.append(Candle(
+            symbol=symbol, timeframe="D1",
+            timestamp=base + timedelta(days=i),
+            open=close, high=high, low=low, close=close,
+            volume=1e6, provider="TEST",
+        ))
+    return out
 
 
-def _candle(price=100.0, amplitude=5.0, i=0) -> Candle:
-    return Candle(symbol="SPY", timeframe="D1",
-                  timestamp=BASE + timedelta(days=i),
-                  open=price, high=price + amplitude, low=price - amplitude,
-                  close=price, volume=1e8, provider="TEST")
+class TestVolatilityFilter:
 
+    def test_allows_when_no_candles(self):
+        """Empty candle list → allow (cannot classify)."""
+        f = VolatilityFilter()
+        assert f.allows([]) is True
 
-def _volatile_candles(n=25, price=100.0, amplitude=10.0) -> List[Candle]:
-    return [_candle(price, amplitude, i) for i in range(n)]
+    def test_blocks_high_vol_regime(self):
+        """Filter must block HIGH_VOL regime."""
+        mock_det = MagicMock()
+        mock_det.classify.return_value = VolatilityRegime.HIGH_VOL
+        f = VolatilityFilter(detector=mock_det)
+        candles = _candles()
+        assert f.allows(candles) is False
 
+    def test_allows_normal_vol_regime(self):
+        mock_det = MagicMock()
+        mock_det.classify.return_value = VolatilityRegime.NORMAL_VOL
+        f = VolatilityFilter(detector=mock_det)
+        assert f.allows(_candles()) is True
 
-def _calm_candles(n=25, price=100.0, amplitude=0.2) -> List[Candle]:
-    return [_candle(price, amplitude, i) for i in range(n)]
+    def test_allows_low_vol_regime(self):
+        mock_det = MagicMock()
+        mock_det.classify.return_value = VolatilityRegime.LOW_VOL
+        f = VolatilityFilter(detector=mock_det)
+        assert f.allows(_candles()) is True
 
+    def test_allows_extreme_vol_regime(self):
+        """EXTREME_VOL is not in the blocked set for Phase 5.4 — only HIGH_VOL."""
+        mock_det = MagicMock()
+        mock_det.classify.return_value = VolatilityRegime.EXTREME_VOL
+        f = VolatilityFilter(detector=mock_det)
+        assert f.allows(_candles()) is True
 
-def _trade_at(i, candles, pnl=100.0) -> BacktestTrade:
-    ts = candles[i].timestamp
-    return BacktestTrade(
-        symbol="SPY", entry_time=ts, exit_time=ts + timedelta(days=1),
-        signal_type=SignalType.LONG,
-        entry_price=100.0, exit_price=110.0,
-        stop_price=90.0, target_price=115.0,
-        position_size=10, pnl=pnl, return_percent=10.0,
-        holding_period=1, win_loss="WIN",
-        reason_closed=ClosingReason.TARGET,
-    )
+    def test_allows_unknown_regime(self):
+        mock_det = MagicMock()
+        mock_det.classify.return_value = VolatilityRegime.UNKNOWN
+        f = VolatilityFilter(detector=mock_det)
+        assert f.allows(_candles()) is True
 
+    def test_detector_called_with_candles(self):
+        mock_det = MagicMock()
+        mock_det.classify.return_value = VolatilityRegime.NORMAL_VOL
+        f = VolatilityFilter(detector=mock_det)
+        candles = _candles()
+        f.allows(candles)
+        mock_det.classify.assert_called_once_with(candles)
 
-@pytest.fixture
-def vf() -> VolatilityFilter:
-    return VolatilityFilter(atr_period=5, low_threshold=1.0, high_threshold=8.0)
+    def test_default_detector_created(self):
+        """No-arg constructor creates a real VolatilityRegimeDetector."""
+        from src.regime.volatility_regime_detector import VolatilityRegimeDetector
+        f = VolatilityFilter()
+        assert isinstance(f.detector, VolatilityRegimeDetector)
 
+    def test_blocked_regimes_contains_high_vol(self):
+        assert VolatilityRegime.HIGH_VOL in VolatilityFilter.BLOCKED_REGIMES
 
-class TestATRPct:
+    def test_blocked_regimes_does_not_contain_normal(self):
+        assert VolatilityRegime.NORMAL_VOL not in VolatilityFilter.BLOCKED_REGIMES
 
-    def test_returns_none_for_insufficient_data(self, vf):
-        candles = _calm_candles(n=4)  # less than period=5
-        assert vf.atr_pct(candles) is None
+    def test_classify_returns_regime(self):
+        mock_det = MagicMock()
+        mock_det.classify.return_value = VolatilityRegime.HIGH_VOL
+        f = VolatilityFilter(detector=mock_det)
+        assert f.classify(_candles()) == VolatilityRegime.HIGH_VOL
 
-    def test_returns_float_for_sufficient_data(self, vf):
-        candles = _calm_candles(n=10)
-        result = vf.atr_pct(candles)
-        assert result is not None
-        assert isinstance(result, float)
-        assert result >= 0.0
+    def test_classify_empty_candles_returns_unknown(self):
+        f = VolatilityFilter()
+        assert f.classify([]) == VolatilityRegime.UNKNOWN
 
-    def test_high_amplitude_gives_high_atr_pct(self, vf):
-        calm     = _calm_candles(n=20)
-        volatile = _volatile_candles(n=20)
-        pct_c = vf.atr_pct(calm)
-        pct_v = vf.atr_pct(volatile)
-        if pct_c is not None and pct_v is not None:
-            assert pct_v > pct_c
+    def test_repr(self):
+        f = VolatilityFilter()
+        assert "HIGH_VOL" in repr(f)
+        assert "VolatilityFilter" in repr(f)
 
+    def test_remove_high_vol_profile(self):
+        """REMOVE_HIGH_VOL scenario has exclude_high_vol=True."""
+        from src.amplification_validation.filter_profiles import SCENARIO_REMOVE_HIGH_VOL
+        assert SCENARIO_REMOVE_HIGH_VOL.exclude_high_vol is True
 
-class TestCategorize:
-
-    def test_high_amplitude_is_high_volatility(self, vf):
-        candles = _volatile_candles(n=20, amplitude=15.0)
-        result = vf.categorize(candles)
-        assert result in (VolatilityCategory.HIGH, VolatilityCategory.MEDIUM)
-
-    def test_tiny_amplitude_is_low_volatility(self, vf):
-        candles = _calm_candles(n=20, amplitude=0.05)
-        result = vf.categorize(candles)
-        assert result == VolatilityCategory.LOW
-
-    def test_insufficient_data_returns_unknown(self, vf):
-        candles = _calm_candles(n=3)
-        assert vf.categorize(candles) == VolatilityCategory.UNKNOWN
-
-
-class TestAnalyzeTradesByVolatility:
-
-    def test_returns_dict(self, vf):
-        candles = uptrend_candles(n=30, volume=1e8)
-        trades = [_trade_at(i, candles) for i in range(10, 29)]
-        result = vf.analyze_trades_by_volatility(trades, candles)
-        assert isinstance(result, dict)
-
-    def test_trade_count_sums_to_total(self, vf):
-        candles = uptrend_candles(n=30, volume=1e8)
-        trades = [_trade_at(i, candles) for i in range(10, 29)]
-        result = vf.analyze_trades_by_volatility(trades, candles)
-        total = sum(p.trade_count for p in result.values())
-        assert total == len(trades)
-
-    def test_sufficient_flag_based_on_min_trades(self, vf):
-        candles = uptrend_candles(n=30, volume=1e8)
-        trades = [_trade_at(10, candles)]  # only 1 trade
-        result = vf.analyze_trades_by_volatility(trades, candles, min_trades=5)
-        for perf in result.values():
-            assert perf.sufficient is False
-
-    def test_empty_trades_returns_empty(self, vf):
-        candles = uptrend_candles(n=30, volume=1e8)
-        result = vf.analyze_trades_by_volatility([], candles)
-        assert result == {}
+    def test_baseline_profile_no_vol_filter(self):
+        """BASELINE has exclude_high_vol=False."""
+        from src.amplification_validation.filter_profiles import SCENARIO_BASELINE
+        assert SCENARIO_BASELINE.exclude_high_vol is False
